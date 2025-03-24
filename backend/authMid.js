@@ -1,10 +1,13 @@
 // authMiddleware.js
 const jwt = require("jsonwebtoken");
 const jwksClient = require("jwks-rsa");
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Replace these with your Azure AD details
-const tenantId = "c98fb553-0659-4746-aefd-c234de2a5cfc";
-const clientId = "167b6ac5-b782-46e0-a581-906959ffb355"; // App Registration (API)
+const tenantId = process.env.TENANT;
+const clientId = process.env.CLIENT_ID; // App Registration (API)
 const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
 
 const client = jwksClient({
