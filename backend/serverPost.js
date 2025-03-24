@@ -141,7 +141,7 @@ app.get("/forms", checkRole("admin") ,auth, async (req, res) => {
 });
 
 /* ==============================
-   ✅ MOVE FORM TO RECOVERY
+   ✅ MOVE FORM TO RECOVERY add an sql injection
    ============================== */
 app.post("/recoveryForms", checkRole("admin") ,auth, async (req, res) => {
   const { id, name, typeOf, uniqueNumber, status, takeNumber } = req.body;
@@ -215,5 +215,20 @@ app.get("/recoveryForms", checkRole("admin") ,auth, async (req, res) => {
     }
   });
   
+/* ==============================
+   ✅ GET KING SCREEN
+   ============================== */
+
+
+   app.get("/forms/king",checkRole("admin"),auth,async(req,res)=>{
+    try{
+      const getKing=await pool.query("SELECT takeNumber,status FROM recoveryForms WHERE status=$1",[fixed]);
+      
+    }
+    catch(error){
+      console.error("Error fetching king",error);
+      res.status(500).json({message:"Database Error"});
+    }
+   });
 
 app.listen(port, () => console.log(`Server running on port ${port}`));

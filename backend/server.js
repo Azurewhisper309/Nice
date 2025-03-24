@@ -32,8 +32,8 @@ let recoveryForms =[];
 
 const getAll=async()=>{
   try{
-    const res=await query("SELECT * FROM forms");
-    console.log("happend!",res.rows);
+    const res=await query("SELECT * FROM allforms");
+    console.log("happend!",res.rows[0]);
   }
   catch(err){
     console.log("error while fetching",err.message);
