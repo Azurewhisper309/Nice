@@ -42,7 +42,16 @@ passport.use(new OIDCStrategy({
   allowHttpForRedirectUrl: true,
   scope: ['openid', 'profile', 'email']
 }, (iss, sub, profile, accessToken, refreshToken, done) => {
-  return done(null, profile);
+  // Map Azure AD fields to your user object
+  const user = {
+    principalName: profile._json.preferred_username || profile._json.email || profile.email,
+    displayName: profile.displayName || profile._json.name,
+    jobTitle: profile._json.jobTitle,
+    roles: profile._json.roles || ['user'], // fallback to 'user' if roles not present?
+    email: profile._json.email || profile.email
+  };
+  console.log("Azure AD user mapped:", user);
+  return done(null, user);
 }));
 
 // Routes
@@ -63,11 +72,26 @@ app.get('/auth/logout', (req, res) => {
   });
 });
 
-app.get('/auth/user', (req, res) => {
+app.get('/auth/user/:use', (req, res) => {
   if (req.isAuthenticated()) {
-    res.json(req.user);
+    res.json({
+      isAuthenticated: true,
+      roles: req.user.roles,
+      principalName: req.user.principalName,
+      displayName: req.user.displayName,
+      jobTitle: req.user.jobTitle,
+      email: req.user.email
+    });
+
   } else {
-    res.status(401).json({ error: 'Not authenticated' });
+    res.status(401).json({
+      isAuthenticated: false,
+      roles: [],
+      principalName: "",
+      displayName: "",
+      jobTitle: "",
+      email: ""
+    });
   }
 });
 
