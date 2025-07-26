@@ -2,17 +2,19 @@
   "name": "backend",
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
+  "main": "server_db.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server_db.js"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
     "express": "^5.1.0",
     "express-session": "^1.18.1",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.1",
     "passport": "^0.6.0",
     "passport-azure-ad": "^4.3.0",
-    "dotenv": "^16.0.3",
-    "cors": "^2.8.5"
+    "pg": "^8.16.3"
   }
 }
-
