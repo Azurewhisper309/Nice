@@ -123,20 +123,24 @@ export function sanitizeUser(user){
   if(!user || typeof user !== 'object'){
     throw new Error('Invalid user object');
   }
+
   const sanitizedUser = {};
-  sanitizedUser.id = parseInt(user.id, 10);
-  if(isNaN(sanitizedUser.id)){
+  sanitizedUser.id = xss(String(user.id));
+  if(!sanitizedUser.id){
     throw new Error('Invalid user id');
   }
+
   sanitizedUser.name = xss(user.name);
   if(sanitizedUser.name.length > 30){
     throw new Error('Name is too long');
   }
-  //email format is u+take_number+@bsmch.net
+
   sanitizedUser.email = xss(user.email);
-  if(!sanitizedUser.email.match(/^u\d{1,7}@bsmch\.net$/)){
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if(!emailRegex.test(sanitizedUser.email)){
     throw new Error('Invalid email format');
   }
+
   return sanitizedUser;
 }
 
