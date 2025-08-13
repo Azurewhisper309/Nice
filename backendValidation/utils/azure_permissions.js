@@ -1,6 +1,6 @@
 import axios from "axios";
 import pool from "../db.js";
-import { getAzureToken } from "./Token_Admins.js";
+import { getAzureToken } from "./getAzureToken.js";
 
 export async function azurePermissionsHandler(formId) {
   const validPermissions = ['member', 'owner'];

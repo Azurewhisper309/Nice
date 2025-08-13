@@ -1,6 +1,6 @@
 import pool from '../db.js'; // Database connection pool
-//i have to schedule this function to run every 50 days
-export async function deleteInactiveUsers(maxDays=50) {
+//i have to schedule this function to run every 365 days
+export async function deleteInactiveUsers(maxDays=365) {
     try{
        const res_to_delete_Inactive= await pool.query(`DELETE FROM users WHERE created_at <NOW() - INTERVAL $1 days`,[maxDays]);
         console.log(`Inactive users deleted: ${res_to_delete_Inactive.rowCount} users`);

@@ -3,10 +3,10 @@ import upload from '../Middleware/Multer.js';
 import sanitizeFormInput from '../Middleware/sanitized.js';
 import validateUserExists from '../Middleware/validateUserExists.js';
 import pool from '../db.js'; // Database connection pool
-import injectUserRole from '../Middleware/injectUserRole.js';
+import { executePermissionGrant } from '../utils/sharepointValidation.js';
+import { limiter } from '../auth/sessionHandlers.js';
 
 const router_user=express.Router();
-router_user.use(injectUserRole); // Inject user role into request object
 
 //////////////
 //user forms//
@@ -29,7 +29,7 @@ try{
 }
 catch(err){
     console.error(err,'GET/ forms failed');
-    res.status(500).json({error:'Database Error'});
+    return res.status(500).json({error:'Database Error'});
 }
 });
 ///////////////
@@ -37,43 +37,84 @@ catch(err){
 ///////////////
 //in this route i am posting a form with multer and validating the user exists at submitted_by field
 //and then i sanitize all and then insert the sanitized form into forms table and get the response
-//from db and make sure it's created and then send response with the new form and catch error if it fails
-router_user.post('/forms/upload',upload.single('file'), validateUserExists, async (req, res) => {
-   
 
-    const submitted_by= req.validatedSubmittedBy; // Use the validated user ID from the middleware
-    
-    const fileName = req.file?.filename||null; // Get the uploaded file's name
-    const allFields={
-        title:req.body.title,
-        description:req.body.description,
-        submitted_by, // Use the user ID from the request body or default to the authenticated user's ID
-        file_path: fileName,
-        type_of: req.body.type_of, // Default to 'form' if not provided
-        room_number: req.body.room_number, // Optional field
+router_user.post('/forms/upload',
+  upload.single('file'),
+  limiter,
+  validateUserExists,
+  async (req, res) => {
+    const submitted_by = req.validatedSubmittedBy;
+    const fileName = req.file?.filename || null;
+
+    const allFields = {
+      title: req.body.title,
+      description: req.body.description,
+      submitted_by,
+      file_path: fileName,
+      type_of: req.body.type_of,
+      room_number: req.body.room_number,
+      who_to_add: req.body.who_to_add ? JSON.parse(req.body.who_to_add) : [],
+      permission: req.body.permission,
+      site: req.body.site ? JSON.parse(req.body.site) : null,
     };
-    const {title,description,submitted_by:cleanSubmittedBy,file_path,room_number,type_of} =sanitizeFormInput(allFields);
+    const role = req.user.role; // safe, already validated by checkRole
+    const {
+      title, description, submitted_by: cleanSubmittedBy, file_path,
+      room_number, type_of, who_to_add, permission, site
+    } = sanitizeFormInput(allFields,role);
+
     if (submitted_by !== req.user.id) {
-        console.warn(`Unauthorized update attempt by user ${req.user.id} on form owned by ${submitted_by}`);
-        return res.status(403).json({ error: 'You can only update your own forms' });
+      console.warn(`Unauthorized upload attempt by user ${req.user.id}`);
+      return res.status(403).json({ error: 'You can only upload your own forms' });
+    }
+
+    let status = 'new';
+
+    try {
+      if (type_of === 'sharepoint permissions') {
+        await executePermissionGrant({
+          type_of,
+          who_to_add,
+          permission,
+          site,
+          submitted_by: cleanSubmittedBy,
+        });
+        status = 'completed';
+      }
+      // else if (type_of === 'azure permissions') {
+      //   await validateAzureForm({ who_to_add, permission });
+      // }
+    } catch (error) {
+      console.error('Permission validation failed:', error.message);
+      status = 'error';
     }
 
     try {
-        const upload=await pool.query('INSERT INTO forms (file_path, title, description, submitted_by,created_at,type_of,room_number,status) VALUES ($1, $2, $3, $4,$5,$6,$7,$8) RETURNING *', [file_path, title, description, cleanSubmittedBy,new Date(),type_of,room_number,'new']);
-        const newForm = upload.rows[0];
-        
-        if (!newForm) {
-            console.error('Failed to upload form: No form created');
-            return res.status(500).json({ error: 'Failed to upload form' });
-        }
-        res.status(201).json({ message: 'Form uploaded successfully', form: newForm });
-        console.log(`User ${req.user.id} uploaded a form for ${submitted_by}`);
+      const upload = await pool.query(`
+        INSERT INTO forms (file_path, title, description, submitted_by, created_at, type_of, room_number, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [file_path, title, description, cleanSubmittedBy, new Date(), type_of, room_number, status]);
 
-    }catch (err) {
-        console.error(err, 'Failed to upload form');
-        res.status(500).json({ error: 'Database Error' });
+      const newForm = upload.rows[0];
+
+      if (!newForm) {
+        console.error('Form not inserted');
+        return res.status(500).json({ error: 'Upload failed' });
+      }
+
+      const resultMsg = status === 'error'
+        ? 'Form uploaded with validation errors'
+        : 'Form uploaded successfully';
+
+      return res.status(201).json({ message: resultMsg, form: newForm });
+
+    } catch (err) {
+      console.error('DB insert error:', err);
+      return res.status(500).json({ error: 'Database Error' });
     }
-});
+  }
+);
 
 /////////////////////
 //user preview form//
@@ -100,7 +141,7 @@ const formId=req.params.formId;
     }
     catch(err){
         console.error(err,'failed to get preview form');
-        res.status(500).json({ error: 'Database Error' });
+        return res.status(500).json({ error: 'Database Error' });
     }
 });
 
@@ -121,10 +162,10 @@ router_user.delete('/forms/:formId', async (req, res) => {
     if(res_delete_form.rowCount === 0) {
         return res.status(404).json({error: `form not found with id ${formId} from user ${req.user.id}`});
     }
-    res.status(200).json({ message: 'Form deleted successfully', form: res_delete_form.rows[0] });
+    return res.status(200).json({ message: 'Form deleted successfully', form: res_delete_form.rows[0] });
   } catch (err) {
     console.error(err, 'DELETE/ failed to delete form');
-    res.status(500).json({ error: 'Database Error' });
+    return res.status(500).json({ error: 'Database Error' });
     }
 });
 
@@ -160,7 +201,7 @@ router_user.get('/forms/:formId',async(req,res)=>{
   }
   catch(err){
     console.error('GET/ failed to get the specific form user!',err);
-    res.status(500).json({error:'Database Error'});
+    return res.status(500).json({error:'Database Error'});
   }
 });
 
@@ -187,10 +228,9 @@ router_user.get('/forms/:formId',async(req,res)=>{
         description: req.body.description,
         submitted_by: req.body.submitted_by,
     };
+    const role = req.user.role; // safe, already validated by checkRole
+    const { title, description, file_path, submitted_by } = sanitizeFormInput(fields, role);
 
-    const { title, description, file_path, submitted_by } = sanitizeFormInput(fields);
- 
-     
     try{
     const res_check=await pool.query('SELECT * FROM forms WHERE id=$1 AND submitted_by=$2',[formEditedId, submitted_by]);
     if(res_check.rowCount===0){
@@ -204,8 +244,11 @@ router_user.get('/forms/:formId',async(req,res)=>{
     }
     catch(err){
         console.error(err,"failed to update form");
-        res.status(500).json({error:"Database Error"});
+        return res.status(500).json({error:"Database Error"});
     }
+    });
+    router_user.get('/_smoke', (req, res) => {
+    res.status(200).json({ message: 'User routes are working!' });
     });
 
 
@@ -213,3 +256,5 @@ router_user.get('/forms/:formId',async(req,res)=>{
 
 
     export default router_user;
+
+    

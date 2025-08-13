@@ -1,4 +1,5 @@
 import { OIDCStrategy } from 'passport-azure-ad';
+import dotenv from 'dotenv';
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -9,13 +10,13 @@ export const azureStrategy = new OIDCStrategy({
   responseType: 'code',
   responseMode: 'query',
   redirectUrl: process.env.AZURE_REDIRECT_URI,
-  allowHttpForRedirectUrl: true,
+  allowHttpForRedirectUrl: true,//will be false in production
   scope: ['openid', 'profile', 'email']
 }, (issuer, subject, profile, accessToken, refreshToken, done) => {
   if (!profile.oid) return done(new Error('No oid found'), null);
   const user = {
     oid: profile.oid,
-    displayName: profile.displayName,
+    name: profile.name,
     principalName: profile._json.preferred_username,
     roles: profile._json.roles || []
   };

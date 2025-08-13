@@ -9,21 +9,15 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false } // only if using Heroku or SSL
 });
 
+pool.connect()
+  .then(client => {
+    console.log('✅ PostgreSQL connection established successfully');
+    client.release();
+  })
+  .catch(err => {
+    console.error('❌ Failed to connect to PostgreSQL:', err.message);
+  });
+
 export default pool;
 
 
-router_admin.put('list/delete/:userId',validateUserExists,async(req,res)=>{
-const adminList = await getCurrentAzureAdmins(); // correct, structured Graph call
-for (const admin of adminList) {
-  const { id, name } = admin;
-  if (!id || typeof id !== 'string' || !name || typeof name !== 'string') {
-    console.warn(`Invalid admin data: id=${id}, name=${name}`);
-    continue;
-  }
-  const {name:sanitizedName,id: sanitizedId} = sanitizeUser({name, id});
-  const existing = await pool.query('SELECT * FROM users WHERE id = $1', [sanitizedId]);
-  if (existing.rowCount === 0) {
-    await pool.query('INSERT INTO users (id, name, is_kicked) VALUES ($1, $2, false)', [sanitizedId, sanitizedName]);
-  }
-}
-});

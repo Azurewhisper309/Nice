@@ -3,20 +3,30 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import sanitizeFormInput, { sanitizeUser } from '../Middleware/sanitized.js';
 import pool from '../db.js'; // Database connection pool
-import injectUserRole from '../Middleware/injectUserRole.js';
 import validateUserExists from '../Middleware/validateUserExists.js';
-import {getCurrentAzureAdmins} from '../utils/getCurrentAzureAdmins.js';
+import adminList from '../utils/adminList.js'; // Function to get the list of admins from Azure
+import {limiter} from '../auth/sessionHandlers.js'; // Import the rate limiter
+import { executePermissionGrant } from '../utils/sharepointValidation.js';
 
-const adminLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20, 
-  message:'to much requests!'            // limit each IP to 30 requests/min
-});
 
 const router_admin=express.Router();
-router_admin.use(helmet()); // Use Helmet to secure Express apps by setting various HTTP headers
-router_admin.use(injectUserRole); // Inject user role into request object
-router_admin.use('/dashboard/forms', adminLimiter); // Apply rate limiting to the admin dashboard forms route
+  router_admin.use(helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'"], // if you serve any local styles
+      fontSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", "https://graph.microsoft.com", "https://login.microsoftonline.com"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      // reportUri: "/csp-report", // optional
+    }
+  }));
+
 //////////////////////
 ////////ADMIN/////////
 //////////////////////
@@ -35,7 +45,7 @@ router_admin.use('/dashboard/forms', adminLimiter); // Apply rate limiting to th
 // and if the status is mine than the take_number is the user id of myself
 //and if the status is not-relevant than don't filter by it,it's okay that will be take_number
 //but without status than order by date and then try this query and catch if error
-router_admin.get('/dashboard/forms', async (req, res) => {
+router_admin.get('/dashboard/forms',limiter, async (req, res) => {
   const { status, take_number } = req.query;
   const values = [];
   let sql = `SELECT * FROM forms WHERE 1=1`;
@@ -90,7 +100,7 @@ router_admin.get('/dashboard/forms', async (req, res) => {
 //here i get specific form by Id that admin chose if valid and by formId 
 //after checking if the formId is valid and if not return error with status 400
 
-router_admin.get('/dashboard/:formId', async (req, res) => {
+router_admin.get('/dashboard/:formId',limiter, async (req, res) => {
   const { formId } = req.params;
 
   // Validate formId
@@ -137,7 +147,7 @@ router_admin.get('/dashboard/:formId', async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error('GET /dashboard/king failed', err);
-    res.status(500).json({ error: 'Database error' });
+    return res.status(500).json({ error: 'Database error' });
   }
 });
  
@@ -152,15 +162,16 @@ router_admin.get('/dashboard/:formId', async (req, res) => {
 //after updating check id status is not-relevant and if yes then extract the form and delete it from forms table
 //and insert it into not_relevant_forms table and response with message that form moved to not relevant
 //and if not-relevant status is not set then just response with updated form
-router_admin.put('/dashboard/forms/:formId',async(req,res)=>{
+router_admin.put('/dashboard/forms/:formId',validateUserExists,limiter, async(req,res)=>{
   const formId=req.params.formId;
     if (!formId || isNaN(parseInt(formId))) {
         console.error(`Invalid formId: ${formId} from user ${req.user.id}`);
         return res.status(400).json({ error: 'Invalid formId' });
     }
     const fieldsToUpdate = {status:req.body.status, take_number:req.body.take_number};
-    const {status, take_number} = sanitizeFormInput(fieldsToUpdate);
-  
+    const role = req.user.role; // safe, already validated by checkRole
+    const {status, take_number} = sanitizeFormInput(fieldsToUpdate, role);
+
     if (!status || !take_number|| typeof status !== 'string' || isNaN(parseInt(take_number))) {
         console.error(`Invalid status or take_number: ${status}, ${take_number} from user ${req.user.id}`);
         return res.status(400).json({ error: 'Invalid status or take_number' });
@@ -205,7 +216,7 @@ router_admin.put('/dashboard/forms/:formId',async(req,res)=>{
     
   } catch(err){
     console.error(err,"failed to update form");
-    res.status(500).json({error:"Database Error"});
+    return res.status(500).json({error:"Database Error"});
   }
 });
 
@@ -234,7 +245,7 @@ router_admin.get('/not-relevant-forms', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('Failed to fetch not-relevant forms with names', err);
-    res.status(500).json({ error: 'Database error' });
+    return res.status(500).json({ error: 'Database error' });
   }
 });
 
@@ -260,8 +271,9 @@ if(!getbackFormId || isNaN(parseInt(getbackFormId))){
         const {rows} = await pool.query('SELECT * FROM not_relevant_forms WHERE id=$1', [getbackFormId]);
         if (rows.length === 0) return res.status(404).json({ error: 'Form not found in not relevant' });
         const form = rows[0];
-        const sanitized=sanitizeFormInput(form);
-        const {rowToDelete}=await pool.query('DELETE FROM not_relevant_forms WHERE id=$1', [getbackFormId]);
+        const role = req.user.role; // safe, already validated by checkRole
+        const sanitized = sanitizeFormInput(form, role);
+        const {rowToDelete} = await pool.query('DELETE FROM not_relevant_forms WHERE id=$1', [getbackFormId]);
         if(!rowToDelete) {return res.status(404).json({error:'Form not found in not relevant to get back'})};
         await pool.query(
             'INSERT INTO forms (status, id, title, created_at, take_number, file_path, description,type_of,room_number) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
@@ -280,7 +292,7 @@ if(!getbackFormId || isNaN(parseInt(getbackFormId))){
         res.json({ message: "Form moved back to forms table", form });
     } catch (err) {
         console.error('Error during admin sync:', err);
-        res.status(500).json({ error: 'Failed to sync admins' });
+        return res.status(500).json({ error: 'Failed to sync admins' });
     }
 });
 
@@ -309,7 +321,7 @@ router_admin.delete('not-relevant/:formToDeleteId',async(req,res)=>{
     }
     catch(err){
         console.error(err,"DELETE/ failed from not_relevant");
-        res.status(500).json({error:'failed to delete from not relevant'});
+        return res.status(500).json({error:'failed to delete from not relevant'});
     }
 })
 
@@ -322,12 +334,10 @@ router_admin.delete('not-relevant/:formToDeleteId',async(req,res)=>{
 //this route first calls the getAzureToken function to get the list of admins and then vlaidate for each admin
 //if the admin name and id are vlaid and then query for each one checks if admin exist and if not insert it into the database
 //and then response with message that synced from azure app roles and catch if error
-import { getCurrentAzureAdmins } from '../utils/azure.js';
-import { sanitizeUser } from '../utils/sanitized.js'; // assuming your sanitizeUser is here
 
 router_admin.post('/list/sync-admins', async (req, res) => {
   try {
-    const adminList = await getCurrentAzureAdmins(); // fetched from Graph API
+    const adminList = await adminList(); // fetched from Graph API
 
     for (const admin of adminList) {
       try {
@@ -353,7 +363,7 @@ router_admin.post('/list/sync-admins', async (req, res) => {
     res.json({ message: 'Synced admins from Azure successfully' });
   } catch (err) {
     console.error('Error during admin sync:', err);
-    res.status(500).json({ error: 'Failed to sync admins' });
+    return res.status(500).json({ error: 'Failed to sync admins' });
   }
 });
   
@@ -393,14 +403,42 @@ router_admin.put('/list/delete/:userId', async (req, res) => {
       [userId]
     );
 
-    res.json({ message: `User ${userId} has been marked as kicked.` });
+    return res.json({ message: `User ${userId} has been marked as kicked.` });
   } catch (err) {
     console.error('Failed to update user kick status:', err);
-    res.status(500).json({ error: 'Database error' });
+    return res.status(500).json({ error: 'Database error' });
   }
 });
 
-    
+
+router_admin.post('/execute-permission/:formId', async (req, res) => {
+  const { formId } = req.params;
+
+  try {
+    const formResult = await pool.query('SELECT * FROM forms WHERE id = $1', [formId]);
+    const form = formResult.rows[0];
+
+    if (!form) {
+      return res.status(404).json({ error: "Form not found" });
+    }
+
+    // Optional: parse `who_to_add` from DB if stored as JSON string
+    form.who_to_add = JSON.parse(form.who_to_add);
+
+    await executePermissionGrant(form);
+
+    return res.status(200).json({ message: "Permission revalidated successfully. Safe to execute." });
+
+  } catch (error) {
+    console.error('Permission execution failed:', error);
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+router_admin.get('/_smoke', (req, res) => {
+  res.status(200).json({ message: 'Admin routes are working!' });
+});
+
 
 
 
